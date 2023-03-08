@@ -15,10 +15,6 @@
 #define CLK_PIN 34
 #define DATA_PIN 13
 
-//#define x_con 0.905
-//#define y_con 1
-//#define z_con 1.089
-
 #define RED_LED 32
 #define GREEN_LED 33
 #define BLUE_LED 2
@@ -47,6 +43,17 @@ uint8_t red[10], green[10], blue[10];
 float x[10], y[10], z[10];
 float c_x[10], c_y[10], c_z[10];
 
+float L, A, B_1, F_X, F_Y, F_Z, xr, yr, zr;
+
+float X_R = 0.905;
+float Y_R = 1.000;
+float Z_R = 1.089;
+
+float O, P, Q;
+
+#define E 0.008856
+#define K 903.3
+
 // setting PWM properties
 const int ledPin = 5;
 const int freq = 5000;
@@ -65,16 +72,18 @@ mtx_type C[N][N] =
 
 mtx_type T[N][N] =
 {
- 
-{1.4628067, -0.1840623, -0.2743606},
-{-0.5217933, 1.4472381,  0.0677227},
-{ 0.0349342, -0.0968930,  1.2884099} 
+
+  {3.2404542, -1.5371385, -0.4985314},
+  { -0.9692660,  1.8760108,  0.0415560},
+  { 0.0556434, -0.2040259,  1.0572252}
 
 };
 mtx_type v[N];        // This is a row vector
 mtx_type w[N];        // result of calibrated xyz matrix
 mtx_type r[N];        // result of calibrated srgb  matrix
 mtx_type maxVal = 10; // maxValimum random matrix entry range
+
+
 float val_bfr_conver[3];
 float rawSrgb[3];
 
@@ -122,28 +131,107 @@ int EEPROM_readAnything(int ee, T &value)
   return i;
 }
 
+
+
+float lab_calculation(float L3)
+{
+  if (L3 > E)
+  {
+    return ((float)cbrt(L3));
+  }
+  else
+  {
+    return (((K * L3) + 16) / 116) ;
+  }
+}
+
+
+
+
 void calibration_matrix(uint16_t a, uint16_t b, uint16_t c)
 {
 
-  /*
-    v[0] = ((double)a*x_con)/1000;   // (double)a/10;
-    v[1] = ((double)b*y_con)/1000;   // (double)b/10;
-    v[2] = ((double)c*z_con)/1000;  // (double)c/10;
-  */
 
   v[0] = ((double)a / 1000); // (double)a/10;
   v[1] = ((double)b / 1000); // (double)b/10;
   v[2] = ((double)c / 1000); // (double)c/10;
 
-  // Serial.printf("\n\n%d,%d,%d\n\n",R,G,B);
-
   Matrix.Multiply((mtx_type *)C, (mtx_type *)v, N, N, 1, (mtx_type *)w);
-  // Matrix.Print((mtx_type*)C, N, N, "C");
-  // Matrix.Print((mtx_type*)v, N, 1, "v");
-  // Matrix.Print((mtx_type*)w, N, 1, "w");
 
-//  Serial.printf("\n\n v = %f,%f,%f\n\n", v[0], v[1], v[2]);
 }
+
+void lab_matrix(float s, float t, float u)
+{
+
+  xr = (s / X_R);
+  yr = (t / Y_R);
+  zr = (u / Z_R);
+
+  F_X = lab_calculation(xr);
+
+  F_Y = lab_calculation(yr);
+
+  F_Z = lab_calculation(zr);
+
+  L = (116 * F_Y) - 16 ;
+
+  A = 500 * (F_X - F_Y);
+
+  B_1 = 200 * (F_Y - F_Z);
+
+}
+
+
+void relab_matrix(float L2, float A2, float B2)
+{
+
+  F_X = 0;
+  F_Y = 0;
+  F_Z = 0;
+
+  F_Y = (L2 + 16) / 116 ;
+
+  F_X = (A2 / 500) + F_Y ;
+
+  F_Z = F_Y - (B2 / 200);
+
+
+  if ( pow(F_X, 3) > E)
+  {
+    xr = pow(F_X, 3);
+  }
+  else
+  {
+    xr = ((116 * F_X) - 16) / K;
+  }
+
+
+  if (L2 > (K * E))
+  {
+    yr = pow(((L2 + 16) / 116), 3);
+  }
+  else
+  {
+    yr = (L2 / K);
+  }
+
+
+  if (pow(F_Z, 3) > E)
+  {
+    zr = pow(F_Z, 3);
+  }
+  else
+  {
+    zr = ((116 * F_Z) - 16) / K;
+  }
+
+  w[0] = X_R * xr ;
+  w[1] = Y_R * yr ;
+  w[2] = Z_R * zr ;
+
+}
+
+
 
 float adj(float C)
 {
@@ -178,7 +266,7 @@ void xyz_to_rgb_conversion()
   if (B > 255)
     B = 255;
 
- // Serial.printf("\n\n%d,%d,%d\n\n", R, G, B);
+
 }
 
 void colorsensor_Data(uint16_t temp)
@@ -192,18 +280,7 @@ void colorsensor_Data(uint16_t temp)
     delay(1000);
   }
 
-  //X = ((double)X * x_con); // (double)a/10;
-  //Y = ((double)Y * y_con); // (double)b/10;
-  //Z = ((double)Z * z_con); // (double)c/10;
-
   delay(10);
-
-  // Serial.print(x);
-  // Serial.print("\t");
-  // Serial.print(y);
-  // Serial.print("\t");
-  // Serial.print(z);
-  // Serial.println();
 
   x[temp] = (float)X / 10;
   y[temp] = (float)Y / 10;
@@ -214,6 +291,24 @@ void colorsensor_Data(uint16_t temp)
   c_x[temp] = (float)w[0];
   c_y[temp] = (float)w[1];
   c_z[temp] = (float)w[2];
+
+  O = w[0];
+  P = w[1];
+  Q = w[2];
+
+
+
+  // LAB TO XYZ
+  lab_matrix(O, P, Q);
+
+  // LAB MODIFICATIONS
+
+  L = L + 4.000;
+  A =  A + 5.000;
+  B_1 = B_1 - 3.000;
+
+  // LAB TO XYZ
+  relab_matrix(L, A, B_1);
 
   xyz_to_rgb_conversion();
 
@@ -376,7 +471,7 @@ void readJsonData()
 
   root.printTo(jsonData);
 
-  // Serial.println(jsonData);
+
 }
 
 void check_battery_status()
@@ -390,8 +485,8 @@ void check_battery_status()
     digitalWrite(Battery_enable_pin, LOW);
   }
 
-  //Serial.println(battery_value/5);
-  battery_value /= 5;  
+
+  battery_value /= 5;
 
   if (battery_value < 2000)
   {
@@ -400,13 +495,13 @@ void check_battery_status()
     digitalWrite(RED_LED, HIGH);
     delay(500);
 
-    //esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+
     delay(10);
 
     Serial.println("Going to sleep now...");
     delay(1000);
     digitalWrite(RED_LED, LOW);
-    //esp_deep_sleep_start();
+
   }
 }
 
@@ -439,13 +534,6 @@ void scan_data()
     state = 0x0000;
     if (digitalRead(DATA_PIN))
     {
-      // red[counter] = counter;
-      // green[counter] = counter;
-      // blue[counter] = counter;
-
-      // else
-      //   for(int i=1;i<=10;i++)
-      //    Serial.printf("%u  %u  %u\n", red[i],green[i],blue[i]);
 
       if (counter < 5)
       {
@@ -516,78 +604,15 @@ void scan_data()
         digitalWrite(GREEN_LED, LOW);
         digitalWrite(BLUE_LED, HIGH);
 
-        // Serial.println("loop3 ");
+
       }
 
-      ////////////////////////////////////////
+
     }
-    // Serial.println(counter);
+
   }
 
-  // state = (state << 1) | digitalRead(CLK_PIN) | 0xe000;
 
-  // if ((state == 0xf000) || (slot == 0))
-  // {
-  //   state = 0x0000;
-  //   if  ((digitalRead(DATA_PIN)) && (init_count !=3))
-  //   //if  (digitalRead(DATA_PIN))
-  //   {
-  //     Serial.println("loop1");
-  //     if (counter > 0){
-  //       counter--;
-  //     Serial.println("loop2");
-  //     }
-
-  //     if (counter == 0){
-  //       //start = true;
-  //       //end = false;
-  //       --slot;
-  //       digitalWrite(BLUE_LED, HIGH);
-  //       Serial.println("loop3 ");
-  //     }
-
-  //     if(slot < 0)
-  //     slot = 0;
-
-  //   }
-  //   else
-  //   {
-  //     if (counter < 5)
-  //     {
-  //       //start = false;
-  //       digitalWrite(BLUE_LED, LOW);
-  //       digitalWrite(GREEN_LED, HIGH);
-  //       counter++;
-  //       init_slot = false;
-  //       // red[counter] = counter;
-  //       // green[counter] = counter;
-  //       // blue[counter] = counter;
-  //     }
-
-  //     if((counter == 5) || (slot == 0)){
-  //       counter = 0;
-  //       Serial.println(slot);
-  //       colorsensor_Data(slot);
-  //       slot++;
-  //       delay(500);
-  //       digitalWrite(GREEN_LED, LOW);
-  //       digitalWrite(BLUE_LED, HIGH);
-
-  //     }
-
-  //     if(slot == 10)
-  //     {
-  //       if(init_slot == true)
-  //         slot = 0;
-  //       end = true;
-  //       digitalWrite(BLUE_LED, LOW);
-  //       digitalWrite(GREEN_LED, LOW);
-  //       for (int i = 0; i < 10; i++)
-  //         Serial.printf("%u  %u  %u\n", red[i], green[i], blue[i]);
-  //     }
-  //   }
-  //   //Serial.println(counter);
-  // }
 }
 
 void blink_blueLED()
@@ -693,10 +718,7 @@ void send_ble_data()
         send_data = "";
         delay(35);
       }
-      // size_t len = jsonData.length();
-      // send_data = (String)len;
-      // pTxCharacteristic->setValue(send_data); // Notify fromSerial.
-      // pTxCharacteristic->notify();
+
       send_data = "";
       jsonData = "";
       fromSerial = "";
@@ -821,11 +843,6 @@ void read_calib_from_EEPROM(int ee_address)
   EEPROM_readAnything(ee_address + 56, C[2][1]);
   EEPROM_readAnything(ee_address + 64, C[2][2]);
 
- /* for (int i = 0; i < 3; i++)
-  {
-    for (int j = 0; j < 3; j++)
-      Serial.println(C[i][j]);
-  }*/
 }
 
 void read_conv_from_EEPROM(int ee_address)
@@ -840,13 +857,7 @@ void read_conv_from_EEPROM(int ee_address)
   EEPROM_readAnything(ee_address + 56, T[2][1]);
   EEPROM_readAnything(ee_address + 64, T[2][2]);
 
-  // for(int i=0; i<3 ;i++){
-  //   for(int j=0;j<3;j++)
-  //   Serial.println(T[i][j]);
-  // }
 
-  // EEPROM_readAnything(ee_address + 72, dutycycle);
-  // Serial.println(dutycycle);
 }
 
 void parse_json_data(String in_data)
@@ -877,19 +888,7 @@ void parse_json_data(String in_data)
   C[2][0] = (jsonString["calibration_values"][6]);
   C[2][1] = (jsonString["calibration_values"][7]);
   C[2][2] = (jsonString["calibration_values"][8]);
-  /*
-    T[0][0] = (jsonString["conversion_values"][0]);
-    T[0][1] = (jsonString["conversion_values"][1]);
-    T[0][2] = (jsonString["conversion_values"][2]);
-    T[1][0] = (jsonString["conversion_values"][3]);
-    T[1][1] = (jsonString["conversion_values"][4]);
-    T[1][2] = (jsonString["conversion_values"][5]);
-    T[2][0] = (jsonString["conversion_values"][6]);
-    T[2][1] = (jsonString["conversion_values"][7]);
-    T[2][2] = (jsonString["conversion_values"][8]);
 
-    dutycycle = (jsonString["conversion_values"][9]);
-  */
 
   // store to EEPROM
   if (C[0][0] > 0)
@@ -898,12 +897,6 @@ void parse_json_data(String in_data)
     read_calib_from_EEPROM(0);
   }
 
-  /*
-    if(T[0][0] > 0){
-    write_conv_to_EEPROM(72);
-    //read_conv_from_EEPROM(72);
-    }
-  */
 }
 
 class MyServerCallbacks : public BLEServerCallbacks
@@ -1022,8 +1015,8 @@ void setup()
   delay(100);
   digitalWrite(BLUE_LED, LOW);
 
-    init_BLE();
-    delay(500);
+  init_BLE();
+  delay(500);
 
   Wire.begin(26, 27); // sda= GPIO_21 /scl= GPIO_22
   colour.begin();
@@ -1041,27 +1034,27 @@ void setup()
   }
 
   read_calib_from_EEPROM(0);
-  // read_conv_from_EEPROM(72);
+  
 
   ledcWrite(ledChannel, dutycycle);
 
   ///////////SLOT SENSOR////////////////////////
 
-    while (digitalRead(slot_PIN) == HIGH)
-    {
-      blink_redLED();
-    }
-  
-    digitalWrite(RED_LED, LOW);
-  
-  
-    while (start == true && end == false)
-    {
-      blink_blueLED();
-      //Serial.println("EarthFace");
-    }
-  
-    while (digitalRead(slot_PIN) == LOW);
+  while (digitalRead(slot_PIN) == HIGH)
+  {
+    blink_redLED();
+  }
+
+  digitalWrite(RED_LED, LOW);
+
+
+  while (start == true && end == false)
+  {
+    blink_blueLED();
+    //Serial.println("EarthFace");
+  }
+
+  while (digitalRead(slot_PIN) == LOW);
 
 
   ///////////////////////////////////////////
@@ -1072,7 +1065,7 @@ void setup()
 
 
 
-  int slot_analog = 0;
+int slot_analog = 0;
 
 void loop()
 {
@@ -1080,53 +1073,10 @@ void loop()
   if (currentMillis - previousMillis >= 10000)
   {
     previousMillis = currentMillis;
-     check_battery_status();
+    check_battery_status();
   }
 
 
-
-
-//  if (start == true && end == false)
-//  {
-//    for (int j = 0; j < 10; j++) {
-//      slot_analog = slot_analog + analogRead(slot_PIN);
-//      delay(5);
-//    }
-//
-//    if (slot_analog / 10 < 2900) {
-//      blink_redLED();
-//      
-//    }
-//    else if (slot_analog / 10 > 2900) {
-//      blink_blueLED();
-//    }
-//    Serial.println(slot_analog/10);
-//    slot_analog = 0;
-//    
-//  }
-//
-//
-//
-//  if (start == false && end == false) {
-//    if(slot_analog == 0){
-//       for (int j = 0; j < 10; j++) {
-//        slot_analog = slot_analog + analogRead(slot_PIN);
-//        delay(5);
-//      }
-//      Serial.println(slot_analog/10);
-//    }
-//    
-//    if(slot_analog/10 >  2900){
-//       slot_analog = 0;
-//    }
-//    else{
-//      scan_data();
-//       slot_analog = 1;
-//    }
-//  }
-    
-
-  
 
   if (start == false && end == true)
   {
@@ -1134,7 +1084,7 @@ void loop()
     send_ble_data();
   }
 
-    scan_data();
+  scan_data();
 
 
 }
